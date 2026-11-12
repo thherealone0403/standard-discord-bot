@@ -1,6 +1,6 @@
 # Standard Discord Bot
 
-Ein einfacher, sauberer Discord-Bot-Grundbaustein mit Python, `discord.py` und Slash-Commands.
+Ein einfacher Discord-Bot-Grundbaustein mit Python, `discord.py` und Slash-Commands.
 
 ## Voraussetzungen
 
@@ -23,9 +23,11 @@ Kopiere `.env.example` nach `.env` und trage dort deinen Bot-Token ein:
 
 ```env
 DISCORD_TOKEN=dein_bot_token_hier
+SUPPORT_ROLE_ID=123456789012345678
+TICKET_CATEGORY_ID=123456789012345678
 ```
 
-Die echte `.env` wird durch `.gitignore` ausgeschlossen. Teile deinen Token niemals und committe ihn nicht.
+`SUPPORT_ROLE_ID` und `TICKET_CATEGORY_ID` sind optional. Ohne Support-Rolle sehen nur der Ticket-Ersteller und der Bot den Ticket-Kanal. Die echte `.env` wird durch `.gitignore` ausgeschlossen. Teile deinen Token niemals und committe ihn nicht.
 
 ## Bot starten
 
@@ -33,6 +35,11 @@ Die echte `.env` wird durch `.gitignore` ausgeschlossen. Teile deinen Token niem
 python main.py
 ```
 
-Der Bot synchronisiert beim Start die Slash-Commands. Der Beispiel-Command `/ping` antwortet mit `Pong!`.
+Der Bot synchronisiert beim Start die Slash-Commands. Verfügbare Befehle:
 
-Beim Einladen des Bots müssen mindestens die Scopes `bot` und `applications.commands` ausgewählt sein. Für den Beispiel-Command sind keine privilegierten Intents erforderlich.
+- `/ticket` erstellt ein privates Support-Ticket. Der Ersteller oder Support kann es über den Button schließen.
+- `/buypanel` veröffentlicht das Kauf-Panel. Die Produktauswahl startet ein privates Ticket für das gewählte Produkt.
+- `/buypanel-status` zeigt den Verfügbarkeitsstatus und erlaubt Server-Verwaltern, Produkte mit den Buttons ein- oder auszuschalten. Statusänderungen werden gespeichert und bestehende Kauf-Panels live aktualisiert.
+- `/ping` antwortet mit `Pong!`.
+
+Verfügbare Produkte: Project Neo, Project retrad, Project stellar, CSGO2 und Storm arc. Der Bot benötigt zum Erstellen und Verwalten der Tickets die Berechtigungen zum Verwalten von Kanälen sowie zum Senden und Anzeigen von Nachrichten. Beim Einladen müssen mindestens die Scopes `bot` und `applications.commands` ausgewählt sein.
