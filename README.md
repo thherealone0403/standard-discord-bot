@@ -38,9 +38,9 @@ python main.py
 Der Bot synchronisiert beim Start die Slash-Commands. Verfügbare Befehle:
 
 - `/ticket` erstellt sofort ein privates Support-Ticket.
-- `/ticket-panel` veröffentlicht ein Ticket-Panel mit Auswahl für allgemeinen Support, Kaufanfragen und gemeldete Probleme. Die Auswahl erstellt einen privaten Ticket-Kanal; ein Ticket kann über den Schließen-Button beendet werden.
-- `/buypanel` veröffentlicht das Kauf-Panel. Dafür ist keine Berechtigung „Server verwalten“ erforderlich; der Bot muss im aktuellen Kanal Nachrichten senden und Embeds einbetten dürfen.
-- `/buypanel-status` zeigt den Verfügbarkeitsstatus und erlaubt Server-Verwaltern, Produkte ein- oder auszuschalten.
+- `/ticket-panel` veröffentlicht ein Ticket-Panel mit Auswahl für allgemeinen Support, Kaufanfragen und gemeldete Probleme.
+- `/buypanel` veröffentlicht das Kauf-Panel mit Verfügbarkeitsstatus und Lifetime-Preis pro Produkt. Dafür ist keine Berechtigung „Server verwalten“ erforderlich.
+- `/buypanel-status` zeigt den Verfügbarkeitsstatus und bietet Buttons zum Ein-/Ausschalten und zum Ändern des Lifetime-Preises. Preise werden im Format `Lifetime: 12,50 €` angezeigt. Für die Verwaltung ist „Server verwalten“ erforderlich.
 - `/ping` antwortet mit `Pong!`.
 
-Verfügbare Produkte: Project Neo, Project retrad, Project stellar, CSGO2 und Storm arc. Der Bot benötigt zum Erstellen und Verwalten der Tickets die Berechtigung „Kanäle verwalten“. Benutzer benötigen diese Bot-Berechtigung nicht. Zum Ändern der Produktverfügbarkeit bleibt „Server verwalten“ erforderlich, damit nicht beliebige Mitglieder den Status ändern können.
+Verfügbare Produkte: Project Neo, Project retrac, Project stellar, CSGO2 und Storm arc. Preise sind zunächst nicht festgelegt und können über `/buypanel-status` gesetzt werden. Der Bot benötigt zum Erstellen und Verwalten der Tickets die Berechtigung „Kanäle verwalten“; Benutzer benötigen diese Bot-Berechtigung nicht.

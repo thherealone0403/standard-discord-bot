@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import discord
@@ -12,7 +13,7 @@ load_dotenv()
 
 PRODUCTS = (
     "Project Neo",
-    "Project retrad",
+    "Project retrac",
     "Project stellar",
     "CSGO2",
     "Storm arc",
@@ -26,10 +27,15 @@ STATE_FILE = Path(os.getenv("BOT_STATE_FILE", "bot_state.json"))
 
 
 def load_state() -> dict:
-    default = {"availability": {product: True for product in PRODUCTS}, "buy_panels": []}
+    default = {
+        "availability": {product: True for product in PRODUCTS},
+        "prices": {product: None for product in PRODUCTS},
+        "buy_panels": [],
+    }
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         default["availability"].update(data.get("availability", {}))
+        default["prices"].update(data.get("prices", {}))
         default["buy_panels"] = data.get("buy_panels", [])
     except (OSError, json.JSONDecodeError, TypeError):
         pass
@@ -44,12 +50,22 @@ def save_state() -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def format_price(value: object) -> str:
+    if value is None or value == "":
+        return "nicht festgelegt"
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return "nicht festgelegt"
+    return f"{amount:.2f}".replace(".", ",") + " €"
+
+
 def status_embed() -> discord.Embed:
-    embed = discord.Embed(title="Verfügbarkeit", color=discord.Color.blurple())
+    embed = discord.Embed(title="Verfügbarkeit & Preise", color=discord.Color.blurple())
     for product in PRODUCTS:
         available = state["availability"].get(product, False)
         embed.add_field(
-            name=f"{'🟢' if available else '🔴'} {product}",
+            name=f"{'🟢' if available else '🔴'} {product} · Lifetime: {format_price(state['prices'].get(product))}",
             value="Verfügbar" if available else "Nicht verfügbar",
             inline=False,
         )
@@ -65,7 +81,7 @@ def buy_embed() -> discord.Embed:
     for product in PRODUCTS:
         available = state["availability"].get(product, False)
         embed.add_field(
-            name=f"{'🟢' if available else '🔴'} {product}",
+            name=f"{'🟢' if available else '🔴'} {product} · Lifetime: {format_price(state['prices'].get(product))}",
             value="Verfügbar" if available else "Derzeit nicht verfügbar",
             inline=True,
         )
@@ -145,7 +161,7 @@ async def create_ticket(
 
 
 async def refresh_buy_panels() -> None:
-    # Bestehende Kauf-Panels werden nach einer Statusänderung ebenfalls aktualisiert.
+    # Bestehende Kauf-Panels werden nach Preis- oder Statusänderungen aktualisiert.
     valid_panels = []
     for panel in state["buy_panels"]:
         try:
@@ -271,21 +287,73 @@ class BuyPanelView(discord.ui.View):
         )
 
 
+class ProductPriceModal(discord.ui.Modal):
+    def __init__(self, product: str, status_view: "StatusManagementView") -> None:
+        super().__init__(title=f"Lifetime-Preis: {product}")
+        self.product = product
+        self.status_view = status_view
+        current_price = state["prices"].get(product)
+        self.price = discord.ui.TextInput(
+            label="Preis in Euro",
+            placeholder="z. B. 12,50",
+            default=str(current_price).replace(".", ",") if current_price is not None else None,
+            max_length=12,
+            required=True,
+        )
+        self.add_item(self.price)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw_price = str(self.price.value).strip().replace(",", ".")
+        try:
+            amount = Decimal(raw_price)
+        except InvalidOperation:
+            await interaction.response.send_message(
+                "Bitte gib einen gültigen Preis ein, zum Beispiel 12,50.", ephemeral=True
+            )
+            return
+        if not amount.is_finite() or amount < 0 or amount > Decimal("999999.99"):
+            await interaction.response.send_message(
+                "Der Preis muss zwischen 0 und 999999,99 € liegen.", ephemeral=True
+            )
+            return
+
+        state["prices"][self.product] = format(amount, "f")
+        save_state()
+        self.status_view.refresh_buttons()
+        await refresh_buy_panels()
+        if interaction.message is not None:
+            await interaction.response.edit_message(embed=status_embed(), view=self.status_view)
+        else:
+            await interaction.response.send_message(
+                f"Lifetime-Preis für **{self.product}** gespeichert: {format_price(amount)}",
+                ephemeral=True,
+            )
+
+
 class StatusManagementView(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=None)
         for index, product in enumerate(PRODUCTS):
-            button = discord.ui.Button(
+            available = state["availability"].get(product, False)
+            toggle = discord.ui.Button(
                 label=product,
-                style=discord.ButtonStyle.success
-                if state["availability"].get(product, False)
-                else discord.ButtonStyle.danger,
-                emoji="🟢" if state["availability"].get(product, False) else "🔴",
+                style=discord.ButtonStyle.success if available else discord.ButtonStyle.danger,
+                emoji="🟢" if available else "🔴",
                 custom_id=f"buypanel-status:toggle:{index}",
-                row=index // 3,
+                row=index,
             )
-            button.callback = self.make_toggle(product)
-            self.add_item(button)
+            toggle.callback = self.make_toggle(product)
+            self.add_item(toggle)
+
+            price_button = discord.ui.Button(
+                label="Preis ändern",
+                style=discord.ButtonStyle.secondary,
+                emoji="💶",
+                custom_id=f"buypanel-status:price:{index}",
+                row=index,
+            )
+            price_button.callback = self.make_price_editor(product)
+            self.add_item(price_button)
 
     def make_toggle(self, product: str):
         async def toggle(interaction: discord.Interaction) -> None:
@@ -301,6 +369,17 @@ class StatusManagementView(discord.ui.View):
             await refresh_buy_panels()
 
         return toggle
+
+    def make_price_editor(self, product: str):
+        async def edit_price(interaction: discord.Interaction) -> None:
+            if not interaction.user.guild_permissions.manage_guild:
+                await interaction.response.send_message(
+                    "Dafür brauchst du die Berechtigung Server verwalten.", ephemeral=True
+                )
+                return
+            await interaction.response.send_modal(ProductPriceModal(product, self))
+
+        return edit_price
 
     def refresh_buttons(self) -> None:
         for item in self.children:
@@ -382,7 +461,7 @@ async def buypanel(interaction: discord.Interaction) -> None:
     save_state()
 
 
-@bot.tree.command(name="buypanel-status", description="Zeigt und verwaltet die Verfügbarkeit der Produkte.")
+@bot.tree.command(name="buypanel-status", description="Zeigt und verwaltet Produktstatus und Preise.")
 async def buypanel_status(interaction: discord.Interaction) -> None:
     if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
         await interaction.response.send_message(
