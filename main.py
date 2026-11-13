@@ -17,6 +17,11 @@ PRODUCTS = (
     "CSGO2",
     "Storm arc",
 )
+TICKET_TYPES = (
+    ("support", "Allgemeiner Support", "Fragen oder Hilfe zu einem Anliegen"),
+    ("purchase", "Kaufanfrage", "Fragen zu einem Produkt oder einer Bestellung"),
+    ("bug", "Problem melden", "Melde einen Fehler oder ein technisches Problem"),
+)
 STATE_FILE = Path(os.getenv("BOT_STATE_FILE", "bot_state.json"))
 
 
@@ -42,9 +47,12 @@ def save_state() -> None:
 def status_embed() -> discord.Embed:
     embed = discord.Embed(title="Verfügbarkeit", color=discord.Color.blurple())
     for product in PRODUCTS:
-        emoji = "🟢" if state["availability"].get(product, False) else "🔴"
-        label = "Verfügbar" if state["availability"].get(product, False) else "Nicht verfügbar"
-        embed.add_field(name=f"{emoji} {product}", value=label, inline=False)
+        available = state["availability"].get(product, False)
+        embed.add_field(
+            name=f"{'🟢' if available else '🔴'} {product}",
+            value="Verfügbar" if available else "Nicht verfügbar",
+            inline=False,
+        )
     return embed
 
 
@@ -64,8 +72,27 @@ def buy_embed() -> discord.Embed:
     return embed
 
 
+def ticket_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🎫 Support-Tickets",
+        description=(
+            "Wähle im Menü unten aus, worum es geht. Ich erstelle dann einen privaten Kanal, "
+            "in dem du mit dem Support-Team schreiben kannst.\n\n"
+            "Bitte erstelle nur ein Ticket pro Anliegen."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Verfügbare Themen",
+        value="🛟 Allgemeiner Support\n🛒 Kaufanfrage\n🛠️ Problem melden",
+        inline=False,
+    )
+    embed.set_footer(text="Dein Ticket ist nur für dich und das Support-Team sichtbar.")
+    return embed
+
+
 async def create_ticket(
-    interaction: discord.Interaction, *, product: str | None = None
+    interaction: discord.Interaction, *, ticket_type: str = "Allgemeiner Support"
 ) -> discord.TextChannel:
     guild = interaction.guild
     if guild is None:
@@ -104,15 +131,14 @@ async def create_ticket(
     slug = re.sub(r"[^a-z0-9-]", "", interaction.user.name.lower().replace(" ", "-"))[:40]
     channel = await guild.create_text_channel(
         name=f"ticket-{slug or interaction.user.id}",
-        topic=f"ticket_owner:{interaction.user.id}; product:{product or 'support'}",
+        topic=f"ticket_owner:{interaction.user.id}; type:{ticket_type}",
         category=category,
         overwrites=overwrites,
         reason=f"Ticket geöffnet von {interaction.user}",
     )
-    details = f" für **{product}**" if product else ""
     await channel.send(
-        f"Hallo {interaction.user.mention}! Dein Ticket{details} wurde erstellt. Das Support-Team meldet sich hier."
-        ,
+        f"Hallo {interaction.user.mention}! Dein Ticket (**{ticket_type}**) wurde erstellt. "
+        "Das Support-Team meldet sich hier.",
         view=TicketCloseView(),
     )
     return channel
@@ -158,11 +184,50 @@ class TicketCloseView(discord.ui.View):
             role = interaction.guild.get_role(int(role_id)) if interaction.guild else None
             is_staff = is_staff or (role is not None and role in getattr(interaction.user, "roles", []))
         if not (is_owner or is_staff):
-            await interaction.response.send_message("Nur der Ticket-Ersteller oder Support kann schließen.", ephemeral=True)
+            await interaction.response.send_message(
+                "Nur der Ticket-Ersteller oder Support kann schließen.", ephemeral=True
+            )
             return
         await interaction.response.send_message("Ticket wird in 5 Sekunden geschlossen.", ephemeral=True)
         await asyncio.sleep(5)
         await channel.delete(reason=f"Ticket geschlossen von {interaction.user}")
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Select(
+                placeholder="Wähle ein Ticket-Thema …",
+                min_values=1,
+                max_values=1,
+                options=[
+                    discord.SelectOption(label=label, value=value, description=description, emoji=emoji)
+                    for value, label, description, emoji in (
+                        ("support", "Allgemeiner Support", "Fragen oder Hilfe zu einem Anliegen", "🛟"),
+                        ("purchase", "Kaufanfrage", "Fragen zu einem Produkt oder einer Bestellung", "🛒"),
+                        ("bug", "Problem melden", "Melde einen Fehler oder ein technisches Problem", "🛠️"),
+                    )
+                ],
+                custom_id="ticketpanel:type",
+            )
+        )
+        self.children[0].callback = self.create_from_selection
+
+    async def create_from_selection(self, interaction: discord.Interaction) -> None:
+        selected_type = interaction.data["values"][0]
+        labels = {value: label for value, label, _description in TICKET_TYPES}
+        if selected_type not in labels:
+            await interaction.response.send_message("Ungültige Ticket-Auswahl.", ephemeral=True)
+            return
+        try:
+            channel = await create_ticket(interaction, ticket_type=labels[selected_type])
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Dein Ticket wurde erstellt: {channel.mention}", ephemeral=True
+        )
 
 
 class BuyPanelView(discord.ui.View):
@@ -180,22 +245,30 @@ class BuyPanelView(discord.ui.View):
             select.callback = self.select_product
             self.add_item(select)
         else:
-            self.add_item(discord.ui.Button(
-                label="Aktuell keine Produkte verfügbar", style=discord.ButtonStyle.secondary,
-                disabled=True, custom_id="buypanel:unavailable",
-            ))
+            self.add_item(
+                discord.ui.Button(
+                    label="Aktuell keine Produkte verfügbar",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                    custom_id="buypanel:unavailable",
+                )
+            )
 
     async def select_product(self, interaction: discord.Interaction) -> None:
         product = interaction.data["values"][0]
         if product not in PRODUCTS or not state["availability"].get(product, False):
-            await interaction.response.send_message("Dieses Produkt ist aktuell nicht verfügbar.", ephemeral=True)
+            await interaction.response.send_message(
+                "Dieses Produkt ist aktuell nicht verfügbar.", ephemeral=True
+            )
             return
         try:
-            channel = await create_ticket(interaction, product=product)
+            channel = await create_ticket(interaction, ticket_type=f"Kaufanfrage: {product}")
         except ValueError as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
-        await interaction.response.send_message(f"Dein Ticket für **{product}**: {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(
+            f"Dein Ticket für **{product}**: {channel.mention}", ephemeral=True
+        )
 
 
 class StatusManagementView(discord.ui.View):
@@ -204,7 +277,9 @@ class StatusManagementView(discord.ui.View):
         for index, product in enumerate(PRODUCTS):
             button = discord.ui.Button(
                 label=product,
-                style=discord.ButtonStyle.success if state["availability"].get(product, False) else discord.ButtonStyle.danger,
+                style=discord.ButtonStyle.success
+                if state["availability"].get(product, False)
+                else discord.ButtonStyle.danger,
                 emoji="🟢" if state["availability"].get(product, False) else "🔴",
                 custom_id=f"buypanel-status:toggle:{index}",
                 row=index // 3,
@@ -215,18 +290,25 @@ class StatusManagementView(discord.ui.View):
     def make_toggle(self, product: str):
         async def toggle(interaction: discord.Interaction) -> None:
             if not interaction.user.guild_permissions.manage_guild:
-                await interaction.response.send_message("Dafür brauchst du die Berechtigung Server verwalten.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Dafür brauchst du die Berechtigung Server verwalten.", ephemeral=True
+                )
                 return
             state["availability"][product] = not state["availability"].get(product, False)
             save_state()
             self.refresh_buttons()
             await interaction.response.edit_message(embed=status_embed(), view=self)
             await refresh_buy_panels()
+
         return toggle
 
     def refresh_buttons(self) -> None:
         for item in self.children:
-            if isinstance(item, discord.ui.Button) and item.custom_id and item.custom_id.startswith("buypanel-status:toggle:"):
+            if (
+                isinstance(item, discord.ui.Button)
+                and item.custom_id
+                and item.custom_id.startswith("buypanel-status:toggle:")
+            ):
                 index = int(item.custom_id.rsplit(":", 1)[1])
                 product = PRODUCTS[index]
                 available = state["availability"].get(product, False)
@@ -236,8 +318,9 @@ class StatusManagementView(discord.ui.View):
 
 class StandardBot(commands.Bot):
     async def setup_hook(self) -> None:
-        # Persistent views halten Ticket-Buttons und Panels nach Neustarts funktionsfähig.
+        # Persistent views halten Tickets und Panels nach Neustarts funktionsfähig.
         self.add_view(TicketCloseView())
+        self.add_view(TicketPanelView())
         self.add_view(BuyPanelView())
         self.add_view(StatusManagementView())
         await self.tree.sync()
@@ -258,48 +341,63 @@ async def ping(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("Pong! 🏓")
 
 
-@bot.tree.command(name="ticket", description="Erstellt ein privates Support-Ticket.")
+@bot.tree.command(name="ticket", description="Erstellt direkt ein privates Support-Ticket.")
 async def ticket(interaction: discord.Interaction) -> None:
     try:
         channel = await create_ticket(interaction)
     except ValueError as error:
         await interaction.response.send_message(str(error), ephemeral=True)
         return
-    await interaction.response.send_message(f"Dein Ticket wurde erstellt: {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(
+        f"Dein Ticket wurde erstellt: {channel.mention}", ephemeral=True
+    )
 
 
-@bot.tree.command(name="buypanel", description="Zeigt das Kauf-Panel mit verfügbaren Produkten.")
+@bot.tree.command(name="ticket-panel", description="Veröffentlicht das Support-Ticket-Panel.")
+async def ticket_panel(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Das Ticket-Panel kann nur auf einem Server veröffentlicht werden.", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(embed=ticket_panel_embed(), view=TicketPanelView())
+
+
+@bot.tree.command(name="buypanel", description="Veröffentlicht das Kauf-Panel mit verfügbaren Produkten.")
 async def buypanel(interaction: discord.Interaction) -> None:
-    if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message("Dafür brauchst du auf einem Server die Berechtigung Server verwalten.", ephemeral=True)
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Das Kauf-Panel kann nur auf einem Server veröffentlicht werden.", ephemeral=True
+        )
         return
     await interaction.response.send_message(embed=buy_embed(), view=BuyPanelView())
     message = await interaction.original_response()
-    state["buy_panels"].append({
-        "guild_id": str(interaction.guild.id),
-        "channel_id": str(message.channel.id),
-        "message_id": str(message.id),
-    })
+    state["buy_panels"].append(
+        {
+            "guild_id": str(interaction.guild.id),
+            "channel_id": str(message.channel.id),
+            "message_id": str(message.id),
+        }
+    )
     save_state()
 
 
 @bot.tree.command(name="buypanel-status", description="Zeigt und verwaltet die Verfügbarkeit der Produkte.")
 async def buypanel_status(interaction: discord.Interaction) -> None:
     if interaction.guild is None or not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message("Dafür brauchst du auf einem Server die Berechtigung Server verwalten.", ephemeral=True)
+        await interaction.response.send_message(
+            "Dafür brauchst du auf einem Server die Berechtigung Server verwalten.", ephemeral=True
+        )
         return
     await interaction.response.send_message(
-        embed=status_embed(), view=StatusManagementView(),
-        ephemeral=True,
+        embed=status_embed(), view=StatusManagementView(), ephemeral=True
     )
 
 
 async def main() -> None:
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        raise RuntimeError(
-            "DISCORD_TOKEN fehlt. Lege eine .env-Datei an (siehe .env.example)."
-        )
+        raise RuntimeError("DISCORD_TOKEN fehlt. Lege eine .env-Datei an (siehe .env.example).")
 
     async with bot:
         await bot.start(token)
